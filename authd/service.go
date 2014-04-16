@@ -26,7 +26,13 @@ func main() {
 
 	r := mux.NewRouter()
 	r.StrictSlash(false)
+
+	r.HandleFunc("/",ctx.service(InformationHandler))
+	r.HandleFunc("/status/",ctx.service(StatusHandler))
+
 	s := r.PathPrefix("/api/v1").Subrouter()
+	s.HandleFunc("/status/",ctx.service(StatusHandler))
+	s.HandleFunc("/",ctx.service(InformationHandler))
 	
 	/*  client api */
 	s.HandleFunc("/check/{bucket}/{key}/",ctx.client(CheckKeyInBucketHandler))
@@ -95,6 +101,15 @@ func (b *Bucket) Check(key Key) bool {
 type Context struct {
 
 	Buckets map[Key]*Bucket
+}
+
+func (ctx *Context) service(fn func(http.ResponseWriter,*http.Request,*Context)) func(http.ResponseWriter,*http.Request) {
+
+	r := func(w http.ResponseWriter,req *http.Request) {
+
+		fn(w,req,ctx)
+	}
+	return r
 }
 
 func (ctx *Context) client(fn func(http.ResponseWriter,*http.Request,*Context)) func(http.ResponseWriter,*http.Request) {
@@ -172,4 +187,14 @@ func NewContext() *Context {
 	c := new(Context)
 	c.Buckets = make(map[Key]*Bucket,0)
 	return c
+}
+
+func StatusHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+
+
+}
+
+func InformationHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+
+
 }
