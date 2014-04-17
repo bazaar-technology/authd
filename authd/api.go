@@ -164,3 +164,39 @@ func DelBucketHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
 
 	fmt.Fprintf(w,"ok")
 }
+
+func EnableBucketHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+
+	vars := mux.Vars(req)
+	bucket := vars["bucket"]
+
+	log.Printf("Enable %s\n",bucket)
+	
+	b := ctx.GetBucket(Key(bucket))
+	if b == nil {
+
+		http.Error(w,"Invalid Bucket",404)
+		return
+	}
+
+	b.Enable()
+	fmt.Fprintf(w,"ok")
+}
+
+func DisableBucketHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+
+	vars := mux.Vars(req)
+	bucket := vars["bucket"]
+
+	log.Printf("Disable %s\n",bucket)
+
+	b := ctx.GetBucket(Key(bucket))
+	if b == nil {
+
+		http.Error(w,"Invalid Bucket",404)
+		return
+	}
+
+	b.Disable()
+	fmt.Fprintf(w,"ok")
+}
