@@ -21,9 +21,11 @@ var (
 func main() {
 
 	addr := flag.String("addr","127.0.0.1:8080","http service address")
+	namespace := flag.String("ns","namespace.authd.bazaar.technology","Namespace to use for generating ApiKeys")
 	flag.Parse()
 
 	ctx := NewContext()
+	ctx.Namespace = *namespace
 
 	r := mux.NewRouter()
 	r.StrictSlash(false)
@@ -49,6 +51,8 @@ func main() {
 	s.HandleFunc("/enable/{bucket}/",ctx.admin(EnableBucketHandler))
 	s.HandleFunc("/disable/{bucket}/",ctx.admin(DisableBucketHandler))
 
+	s.HandleFunc("/create/",ctx.admin(CreateApiKeyHandler))
+
 	s.HandleFunc("/allow/{key}/",ctx.admin(AllowApiKeyHandler))
 	s.HandleFunc("/allow/{key}/{bucket}/",ctx.admin(AllowApiKeyHandler))
 
@@ -64,6 +68,7 @@ func main() {
 
 type Context struct {
 
+	Namespace string
 	Buckets map[Key]*Bucket
 }
 
@@ -106,12 +111,19 @@ func (ctx *Context) service(fn func(http.ResponseWriter,*http.Request,*Context))
 }
 
 /* This wraps all 'client' api calls, security can be added at this level */
-func (ctx *Context) client(fn func(http.ResponseWriter,*http.Request,*Context)) func(http.ResponseWriter,*http.Request) {
+func (ctx *Context) client(fn func(http.ResponseWriter,*http.Request,ApiKey,*Context)) func(http.ResponseWriter,*http.Request) {
 
 	r := func(w http.ResponseWriter,req *http.Request) {
 		
-		/* TODO, add check X-Headers here for api key etc */
-		fn(w,req,ctx)
+		api := ApiKey(req.Header.Get("X-ApiKey"))
+		if !api.IsValid() {
+			
+			log.Printf("Invalid Api Key %s < %s\n",api.String(),req.RemoteAddr)
+			http.Error(w,"Invalid Api Key",401)
+			return
+		}
+		
+		fn(w,req,api,ctx)
 	}
 	return r
 }
@@ -286,4 +298,16 @@ func RevokeApiKeyHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
 		rep = "OK"
 	}
 	fmt.Fprintf(w,rep)
+}
+
+func CreateApiKeyHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+
+	/* generate new key */
+	nkey,err := GenerateApiKey(ctx.Namespace)
+	if err != nil {
+
+		http.Error(w,err.Error(),500)
+		return
+	}
+	fmt.Fprintf(w,nkey.String())
 }

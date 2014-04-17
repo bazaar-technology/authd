@@ -11,37 +11,6 @@ var (
 	ApiKeyNotFound = errors.New("Api Key Not Found")
 )
 
-type ApiKey string
-
-func (k ApiKey) IsValid() bool {
-
-	if len(string(k)) == 0 { /* TODO: formalise */
-		return false
-	}
-	return true
-}
-
-func (k ApiKey) Obf() string {
-
-	/* TODO */
-	return string(k)
-}
-
-type Key string
-
-func (k Key) IsValid() bool {
-	
-	if len(string(k)) == 0 { /* TODO: formalise */
-		return false
-	}
-	return true
-}
-
-func (k Key) Obf() string {
-
-	/* TODO */
-	return string(k)
-}
 
 type Record struct {
 
@@ -108,9 +77,29 @@ func (b *Bucket) RevokeApiKey(key ApiKey) (bool,error) {
 	return true,nil
 }
 
+
 func (b *Bucket) RevokeAllApiKeys() {
 
 	b.ApiKeyList = make([]ApiKey,0)
+}
+
+func (b *Bucket) Allowed(api ApiKey) (bool,error) {
+
+	if !api.IsValid() {
+		return false,KeyInvalid
+	}
+
+	if len(b.ApiKeyList) == 0 {
+		return true,nil
+	}
+
+	for _,k := range b.ApiKeyList {
+
+		if k == api {
+			return true,nil
+		}
+	}
+	return false,nil
 }
 			
 

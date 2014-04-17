@@ -9,7 +9,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func CheckKeyInBucketHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+func CheckKeyInBucketHandler(w http.ResponseWriter,req *http.Request,api ApiKey,ctx *Context) {
 
 	vars := mux.Vars(req)
 	bucket := vars["bucket"]
@@ -21,6 +21,12 @@ func CheckKeyInBucketHandler(w http.ResponseWriter,req *http.Request,ctx *Contex
 	if b == nil {
 
 		http.Error(w,"NO",404)
+		return
+	}
+
+	if ok,err := b.Allowed(api); !ok || err != nil {
+		
+		http.Error(w,"Not Authorised",401)
 		return
 	}
 
