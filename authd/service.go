@@ -8,6 +8,7 @@ import (
 	"log"
 	"fmt"
 	"errors"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -18,14 +19,24 @@ var (
 	KeyInvalid = errors.New("Invalid Key")
 )
 
+const (
+	DefaultAdminKey = "change-me"
+)
+
 func main() {
 
 	addr := flag.String("addr","127.0.0.1:8080","http service address")
 	namespace := flag.String("ns","namespace.authd.bazaar.technology","Namespace to use for generating ApiKeys")
+	adminKey := flag.String("admin",DefaultAdminKey,"admin key to use")
+	tls := flag.Bool("tls",false,"use TLS")
+	cert := flag.String("cert","./cert.pem","certificate")
+	pkey := flag.String("key","./key.pem","private key")
+
 	flag.Parse()
 
 	ctx := NewContext()
 	ctx.Namespace = *namespace
+	ctx.AdminKey = *adminKey
 
 	r := mux.NewRouter()
 	r.StrictSlash(false)
@@ -35,7 +46,7 @@ func main() {
 
 	s := r.PathPrefix("/api/v1").Subrouter()
 	s.HandleFunc("/status/",ctx.service(StatusHandler))
-	s.HandleFunc("/",ctx.service(InformationHandler))
+	s.HandleFunc("/",ctx.service(ApiInformationHandler))
 	
 	/*  client api */
 	s.HandleFunc("/check/{bucket}/{key}/",ctx.client(CheckKeyInBucketHandler))
@@ -59,15 +70,27 @@ func main() {
 	s.HandleFunc("/revoke/{key}/",ctx.admin(RevokeApiKeyHandler))
 	s.HandleFunc("/revoke/{key}/{bucket}/",ctx.admin(RevokeApiKeyHandler))
 
-	http.Handle("/",r)
 
-	/* Replace */
-	log.Fatal(http.ListenAndServe(*addr,nil))
+	srv := &http.Server{
+		Addr:           *addr,
+		Handler:        r,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	
+	if *tls {
+		
+		log.Fatal(srv.ListenAndServeTLS(*cert,*pkey))
+	} else {
+		log.Fatal(srv.ListenAndServe())
+	}
 }
 
 
 type Context struct {
 
+	AdminKey string
 	Namespace string
 	Buckets map[Key]*Bucket
 }
@@ -133,7 +156,14 @@ func (ctx *Context) admin(fn func(http.ResponseWriter,*http.Request,*Context)) f
 
 	r := func(w http.ResponseWriter,req *http.Request) {
 
-		/* TODO, add check X-Headers here for api key etc */
+		adminKey := req.Header.Get("X-AdminKey")
+		if adminKey != ctx.AdminKey {
+			
+			log.Printf("Invalid Admin Key %s < %s\n",adminKey,req.RemoteAddr)
+			http.Error(w,"Invalid Admin Key",401)
+			return
+		}
+
 		fn(w,req,ctx)
 	}
 	return r
@@ -221,6 +251,11 @@ func StatusHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
 }
 
 func InformationHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
+
+
+}
+
+func ApiInformationHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
 
 
 }

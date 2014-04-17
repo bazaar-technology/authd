@@ -5,10 +5,16 @@ import (
 	"testing"
 )
 
+const (
+	DefaultNamespace = "namespace.authd.bazaar.technology"
+)
+
 func Test_AllowApiKey(t *testing.T) {
 
+	key,_ := GenerateApiKey(DefaultNamespace)
+
 	b := NewBucket("foo")
-	ok,err := b.AllowApiKey(ApiKey("foo.bar.que"))
+	ok,err := b.AllowApiKey(key)
 	if !ok {
 		t.Fatalf("expected to work")
 	}
@@ -19,8 +25,10 @@ func Test_AllowApiKey(t *testing.T) {
 
 func Test_AllowApiKeyAgain(t *testing.T) {
 
+	key,_ := GenerateApiKey(DefaultNamespace)
+
 	b := NewBucket("foo")
-	ok,err := b.AllowApiKey(ApiKey("foo.bar.que"))
+	ok,err := b.AllowApiKey(key)
 	if !ok {
 		t.Fatalf("expected to work")
 	}
@@ -28,7 +36,7 @@ func Test_AllowApiKeyAgain(t *testing.T) {
 		t.Fatalf(err.Error())
 	}
 
-	ok,err = b.AllowApiKey(ApiKey("foo.bar.que"))
+	ok,err = b.AllowApiKey(key)
 	if ok {
 		t.Fatalf("expected to fail")
 	}
@@ -39,13 +47,15 @@ func Test_AllowApiKeyAgain(t *testing.T) {
 
 func Test_GlobalAccess(t *testing.T) {
 
+	key,_ := GenerateApiKey(DefaultNamespace)
+
 	b := NewBucket("foo")
 	if !b.HasGlobalAccess() {
 		
 		t.Fatalf("expected to have global access")
 	}
 
-	ok,err := b.AllowApiKey(ApiKey("foo.bar.que"))
+	ok,err := b.AllowApiKey(key)
 	if !ok {
 		t.Fatalf("expected to work")
 	}

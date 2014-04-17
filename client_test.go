@@ -8,22 +8,39 @@ import (
 	"time"
 	"github.com/gorilla/mux"
 	"testing"
+	"io/ioutil"
 
 	"log"
 )
 
 var (
+	cert = "./authd/cert.pem"
+	key = "./authd/key.pem"
+	insecure = true /* if the cert is self-signed, the test cert is so tell the client to skip verify */
 	addr = "127.0.0.1:8888"
 	once = new(sync.Once)
+
+	useTLS = true /* change to true to test TLS version */
+	
 )
 
 func Test_Offline(t *testing.T) {
 
 	/* do NOT start the dummy service yet */
+	if useTLS {
 
-	c := NewClient("http://" + addr)
-	
-	if c.IsOnline() {
+		data, err := ioutil.ReadFile(cert)
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+
+		StartTLS(addr,data,insecure)
+	} else {
+		Start(addr)
+	}
+
+
+	if IsOnline() {
 
 		t.Fatalf("expected service would be offline")
 	}
@@ -33,9 +50,7 @@ func Test_Online(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
-
-	if !c.IsOnline() {
+	if !IsOnline() {
 
 		t.Fatalf("service offline")
 	}
@@ -44,10 +59,8 @@ func Test_Online(t *testing.T) {
 func Test_ClientCheckYes(t *testing.T) {
 	
 	once.Do(dummy)
-
-	c := NewClient("http://" + addr) /* use the default address */
-	
-	ok,err := c.Check("soap","bar")
+		
+	ok,err := Check("soap","bar")
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -63,11 +76,9 @@ func Test_ClientAuthCheckYes(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
-
 	t0 := time.Now()
 
-	ok,err := c.AuthCheck("soap","bar")
+	ok,err := AuthCheck("soap","bar")
 	
 	t1 := time.Now()
 
@@ -88,9 +99,7 @@ func Test_ClientCheckNo(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
-
-	ok,err := c.Check("soap","tin")
+	ok,err := Check("soap","tin")
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -106,11 +115,9 @@ func Test_ClientAuthCheckNo(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
-
 	t0 := time.Now()
 
-	ok,err := c.AuthCheck("soap","tin")
+	ok,err := AuthCheck("soap","tin")
 	
 	t1 := time.Now()
 	
@@ -134,9 +141,7 @@ func Test_ClientCheckTimeout(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
-
-	_,err := c.CheckWithTimeout("soap","bar")
+	_,err := CheckWithTimeout("soap","bar")
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -147,10 +152,8 @@ func Test_ClientAuthCheckTimeout(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
-	
 	t0 := time.Now()
-	_,err := c.AuthCheckWithTimeout("soap","bar")
+	_,err := AuthCheckWithTimeout("soap","bar")
 	t1 := time.Now()
 	if err != nil {
 
@@ -165,10 +168,9 @@ func Test_ClientCheckTimeoutError(t *testing.T) {
 
 	once.Do(dummy)
 
-	c := NewClient("http://" + addr)
 	var err error
 
-	if _,err = c.CheckWithTimeout("soap","bubble"); err == nil {
+	if _,err = CheckWithTimeout("soap","bubble"); err == nil {
 
 		t.Fatalf("unknown error, should have failed with timeout")
 	}
@@ -182,11 +184,10 @@ func Test_ClientAuthCheckTimeoutError(t *testing.T) {
 
 	once.Do(dummy)
 	
-	c := NewClient("http://" + addr)
 	var err error
 	
 	t0 := time.Now()
-	if _,err = c.AuthCheckWithTimeout("soap","bubble"); err == nil {
+	if _,err = AuthCheckWithTimeout("soap","bubble"); err == nil {
 
 		t.Fatalf("unknown error, should have failed with timeout")
 	}
@@ -202,18 +203,54 @@ func Test_ClientAuthCheckTimeoutError(t *testing.T) {
 
 /* dummy server for testing client api */
 
+type DummyServe struct {
+
+	r *mux.Router	
+}
+
+func (d DummyServe) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+
+	d.r.ServeHTTP(w,req)
+}
+
+
 func dummy() {
 
 	go func() {
-		log.Printf("starting dummy service @%s",addr)
-		r := mux.NewRouter()
-		r.StrictSlash(false)
-		r.HandleFunc("/api/v1/check/{bucket}/{key}/",CheckHandler)
-		r.HandleFunc("/api/v1/status/",StatusHandler)
-		http.Handle("/",r)
-		log.Fatalf(http.ListenAndServe(addr,nil).Error())
+		proto := "http://"
+		if useTLS {
+			proto = "https://"
+		}
+		log.Printf("starting dummy service @%s%s",proto,addr)
+		dumb := new(DummyServe)
+		dumb.r = mux.NewRouter()
+		dumb.r.StrictSlash(false)
+		dumb.r.HandleFunc("/api/v1/check/{bucket}/{key}/",CheckHandler)
+		dumb.r.HandleFunc("/api/v1/status/",StatusHandler)
+	
+		srv := &http.Server{
+		Addr:           addr,
+		Handler:        dumb,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+		}
+	
+		if useTLS {
+			log.Fatal(srv.ListenAndServeTLS(cert,key))
+			
+		} else {
+			
+			log.Fatal(srv.ListenAndServe())
+		}		
 	}()
-	time.Sleep(1 * time.Second)
+
+	if useTLS {
+		log.Printf("....setting up")
+		time.Sleep(5 * time.Second) /* give the server a chance to start up */
+	} else {
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func CheckHandler(w http.ResponseWriter,req *http.Request) {

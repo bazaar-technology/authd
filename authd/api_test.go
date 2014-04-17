@@ -15,7 +15,7 @@ var (
 )
 
 func check(bucket,key string) string {
-
+	
 	return fmt.Sprintf("http://%s/api/v1/check/%s/%s/",defaultAddr,bucket,key)
 }
 
@@ -64,11 +64,32 @@ func request(url string) (int,string,error) {
 	return resp.StatusCode,string(body),nil
 }
 
+func adminRequest(url string) (int,string,error) {
+
+	req,err := http.NewRequest("GET",url,nil)
+	if err != nil {
+		return -1,"",err
+	}
+	req.Header.Add("X-AdminKey",DefaultAdminKey)
+	
+	resp,err := client.Do(req)
+	if err != nil {
+		return -1,"",err
+	}
+
+	defer resp.Body.Close()
+	body,err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode,"",err
+	}
+	return resp.StatusCode,string(body),nil
+}
+
 
 
 func Test_AddBucket(t *testing.T) {
 
-	status,msg,err := request(add("foo"))
+	status,msg,err := adminRequest(add("foo"))
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -80,7 +101,7 @@ func Test_AddBucket(t *testing.T) {
 	}
 
 	/* test for error on reattempt */
-	status,msg,err = request(add("foo"))
+	status,msg,err = adminRequest(add("foo"))
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -95,7 +116,7 @@ func Test_AddBucket(t *testing.T) {
 
 func Test_SetBucket(t *testing.T) {
 
-	status,msg,err := request(set("foo"))
+	status,msg,err := adminRequest(set("foo"))
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -108,7 +129,7 @@ func Test_SetBucket(t *testing.T) {
 
 func Test_AddKey(t *testing.T) {
 
-	status,msg,err := request(addKey("foo","bar"))
+	status,msg,err := adminRequest(addKey("foo","bar"))
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -123,7 +144,7 @@ func Test_AddKey(t *testing.T) {
 
 func Test_DelBucket(t *testing.T) {
 
-	status,msg,err := request(del("foo"))
+	status,msg,err := adminRequest(del("foo"))
 	if err != nil {
 
 		t.Fatalf(err.Error())
@@ -141,7 +162,7 @@ func Benchmark_SetKey(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 
-		status,msg,err := request(url)
+		status,msg,err := adminRequest(url)
 		if err != nil {
 
 			b.Fatalf(err.Error())
@@ -153,8 +174,8 @@ func Benchmark_SetKey(b *testing.B) {
 	}
 }
 
-func Benchmark_CheckKey(b *testing.B) {
-	
+func Benchmark_CheckKeyUnauthorized(b *testing.B) {
+
 	url := check("soap","bar")
 	
 	for i := 0; i < b.N; i++ {
@@ -164,9 +185,9 @@ func Benchmark_CheckKey(b *testing.B) {
 
 			b.Fatalf(err.Error())
 		}
-		if status != 200 {
+		if status != 401 {
 
-			b.Fatalf("incorrect status %d (200) - %s",status,msg)
+			b.Fatalf("incorrect status %d (401) - %s",status,msg)
 		}
 	}
 }
@@ -175,7 +196,7 @@ func Benchmark_Session(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 
-		status,msg,err := request(setKey("tail","bar"))
+		status,msg,err := adminRequest(setKey("tail","bar"))
 		if err != nil {
 
 			b.Fatalf(err.Error())
@@ -185,7 +206,7 @@ func Benchmark_Session(b *testing.B) {
 			b.Fatalf("incorrect status %d (200) - %s",status,msg)
 		}
 		
-		status,msg,err = request(setKey("tail","barb"))
+		status,msg,err = adminRequest(setKey("tail","barb"))
 		if err != nil {
 
 			b.Fatalf(err.Error())
@@ -195,7 +216,7 @@ func Benchmark_Session(b *testing.B) {
 			b.Fatalf("incorrect status %d (200) - %s",status,msg)
 		}
 
-		status,msg,err = request(delKey("tail","bar"))
+		status,msg,err = adminRequest(delKey("tail","bar"))
 		if err != nil {
 
 			b.Fatalf(err.Error())
@@ -205,7 +226,7 @@ func Benchmark_Session(b *testing.B) {
 			b.Fatalf("incorrect status %d (200) - %s",status,msg)
 		}
 				
-		status,msg,err = request(delKey("tail","barb"))
+		status,msg,err = adminRequest(delKey("tail","barb"))
 		if err != nil {
 
 			b.Fatalf(err.Error())

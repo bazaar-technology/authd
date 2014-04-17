@@ -26,7 +26,7 @@ func CheckKeyInBucketHandler(w http.ResponseWriter,req *http.Request,api ApiKey,
 
 	if ok,err := b.Allowed(api); !ok || err != nil {
 		
-		http.Error(w,"Not Authorised",401)
+		http.Error(w,"Unauthorized",401) /* TODO: make whole proper authorized response */
 		return
 	}
 

@@ -2,6 +2,8 @@
 package authd
 
 import (
+	"crypto/x509"
+	"crypto/tls"
 	"net/http"
 	"strings"
 	"io/ioutil"
@@ -12,18 +14,18 @@ import (
 
 
 var (
-	defaultAddr = "http://127.0.0.1:8080"
+	defaultAddr = "127.0.0.1:8080"
 	defaultTimeout = 5 * time.Second
 	defaultAtLeast = 1 * time.Second /* requests always take at least n */
-
-	client = &http.Client{}
-
+	
 	TimeOut = errors.New("Time Out")
+
+	c *client
 )
 
 func request(url string) (int,string,error) {
 
-	resp,err := client.Get(url)
+	resp,err := c.HttpClient.Get(url)
 	if err != nil {
 		return -1,"",err
 	}
@@ -69,14 +71,15 @@ func wrap(addr,bucket,key string) chan response {
 	return ch
 }
 
-type Client struct {
+type client struct {
 
 	Addr string /* service http address */
 	Timeout time.Duration
 	AtLeast time.Duration
+	HttpClient *http.Client
 }
 
-func (c *Client) IsOnline() bool {
+func IsOnline() bool {
 
 	url := fmt.Sprintf("%s/api/v1/status/",c.Addr)
 	status,msg,err := request(url)
@@ -92,12 +95,12 @@ func (c *Client) IsOnline() bool {
 	return true
 }
 
-func (c *Client) Check(bucket,key string) (bool,error) {
+func Check(bucket,key string) (bool,error) {
 
 	return check(c.Addr,bucket,key)
 }
 
-func (c *Client) CheckWithTimeout(bucket,key string) (bool,error) {
+func CheckWithTimeout(bucket,key string) (bool,error) {
 
 	select {
 	case <- time.After(c.Timeout):
@@ -107,7 +110,7 @@ func (c *Client) CheckWithTimeout(bucket,key string) (bool,error) {
 	}
 }
 
-func (c *Client) AuthCheck(bucket,key string) (bool,error) {
+func AuthCheck(bucket,key string) (bool,error) {
 		
 	t0 := time.Now()
 	ok,err := check(c.Addr,bucket,key)
@@ -116,7 +119,7 @@ func (c *Client) AuthCheck(bucket,key string) (bool,error) {
 	return ok,err
 }
 
-func (c *Client) AuthCheckWithTimeout(bucket,key string) (bool,error) {
+func AuthCheckWithTimeout(bucket,key string) (bool,error) {
 
 	t0 := time.Now()
 	
@@ -131,17 +134,46 @@ func (c *Client) AuthCheckWithTimeout(bucket,key string) (bool,error) {
 	}
 }
 
-func NewClient(addr string) *Client {
+func Start(addr string) bool {
 
-	/* TODO: check for valid http address */
-	if len(addr) == 0 {
-
-		addr = defaultAddr
+	if c != nil {
+		return false
 	}
 
-	c := new(Client)
-	c.Addr = addr
+	c = new(client)
+	c.Addr = "http://" + addr
 	c.Timeout = defaultTimeout
 	c.AtLeast = defaultAtLeast
-	return c
+	c.HttpClient = &http.Client{}
+	return true
 }
+
+func StartTLS(addr string,certData []byte,insecure bool) bool {
+
+	if c != nil {
+		return false
+	}
+
+	parts := strings.Split(addr,":")
+
+	c = new(client)
+	c.Addr = "https://" + addr
+	c.Timeout = defaultTimeout
+	c.AtLeast = defaultAtLeast
+		
+	config := &tls.Config {InsecureSkipVerify:insecure,ServerName:parts[0]}
+
+	certs := x509.NewCertPool()
+
+	certs.AppendCertsFromPEM(certData)
+	config.RootCAs = certs
+	
+	tr := &http.Transport{
+		TLSClientConfig: config,
+	}
+
+	c.HttpClient = &http.Client{Transport: tr}
+
+	return true
+}
+
