@@ -9,6 +9,7 @@ import (
 var (
 	ApiKeyAlreadyPresent = errors.New("Api Key Already Present")
 	ApiKeyNotFound = errors.New("Api Key Not Found")
+	BucketNotLive = errors.New("Bucket Not Live")
 )
 
 
@@ -85,12 +86,16 @@ func (b *Bucket) RevokeAllApiKeys() {
 
 func (b *Bucket) Allowed(api ApiKey) (bool,error) {
 
-	if !api.IsValid() {
-		return false,KeyInvalid
+	if ! b.IsLive() {
+		return false,BucketNotLive
 	}
 
 	if len(b.ApiKeyList) == 0 {
 		return true,nil
+	}
+
+	if !api.IsValid() {
+		return false,KeyInvalid
 	}
 
 	for _,k := range b.ApiKeyList {

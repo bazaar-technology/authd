@@ -139,11 +139,14 @@ func (ctx *Context) client(fn func(http.ResponseWriter,*http.Request,ApiKey,*Con
 	r := func(w http.ResponseWriter,req *http.Request) {
 		
 		api := ApiKey(req.Header.Get("X-ApiKey"))
-		if !api.IsValid() {
+		if len(api) > 0 { /* not set, so don't validate here */
+
+			if !api.IsValid() {
 			
-			log.Printf("Invalid Api Key %s < %s\n",api.String(),req.RemoteAddr)
-			http.Error(w,"Invalid Api Key",401)
-			return
+				log.Printf("Invalid Api Key %s < %s\n",api.String(),req.RemoteAddr)
+				http.Error(w,"Invalid Api Key",401)
+				return
+			}
 		}
 		
 		fn(w,req,api,ctx)
