@@ -154,6 +154,10 @@ func (b *Bucket) Disable() {
 	b.live = false
 }
 
+func (b *Bucket) IsEmpty() bool {
+	return (len(b.Records) == 0)
+}
+
 func NewBucket(name Key) *Bucket {
 
 	b := new(Bucket)

@@ -32,6 +32,8 @@ func main() {
 	cert := flag.String("cert","./cert.pem","certificate")
 	pkey := flag.String("key","./key.pem","private key")
 
+	showapi := flag.Bool("api",false,"show the api")
+
 	flag.Parse()
 
 	ctx := NewContext()
@@ -39,37 +41,47 @@ func main() {
 	ctx.AdminKey = *adminKey
 
 	r := mux.NewRouter()
-	r.StrictSlash(false)
 
-	r.HandleFunc("/",ctx.service(InformationHandler))
-	r.HandleFunc("/status/",ctx.service(StatusHandler))
+	api := NewApiV1Router(ctx,r,*addr)
 
-	s := r.PathPrefix("/api/v1").Subrouter()
-	s.HandleFunc("/status/",ctx.service(StatusHandler))
-	s.HandleFunc("/",ctx.service(ApiInformationHandler))
-	
-	/*  client api */
-	s.HandleFunc("/check/{bucket}/{key}/",ctx.client(CheckKeyInBucketHandler))
+	/* client api */
+	api.ClientGetCall("/g/{bucket}",ApiV1GetBucketHandler)
+	api.ClientGetCall("/g/{bucket}/{key}",ApiV1GetKeyHandler)
 
 	/* admin api */
-	s.HandleFunc("/add/{bucket}/{key}/",ctx.admin(AddKeyToBucketHandler))
-	s.HandleFunc("/set/{bucket}/{key}/",ctx.admin(SetKeyInBucketHandler))
-	s.HandleFunc("/del/{bucket}/{key}/",ctx.admin(DelKeyFromBucketHandler))
-	
-	s.HandleFunc("/add/{bucket}/",ctx.admin(AddBucketHandler))
-	s.HandleFunc("/set/{bucket}/",ctx.admin(SetBucketHandler))
-	s.HandleFunc("/del/{bucket}/",ctx.admin(DelBucketHandler))
-	s.HandleFunc("/enable/{bucket}/",ctx.admin(EnableBucketHandler))
-	s.HandleFunc("/disable/{bucket}/",ctx.admin(DisableBucketHandler))
+	//s.HandleFunc("/",ctx.admin(ApiV1PutRootHandler)).Methods("PUT") /* allows common tasks */
+	//s.HandleFunc("/",ctx.admin(ApiV1DeleteRootHandler)).Methods("DELETE") /* allows common tasks */
 
-	s.HandleFunc("/create/",ctx.admin(CreateApiKeyHandler))
+	allowed := make(map[string]string,0)
+	allowed["allow"] = "api-key"
+	allowed["revoke"] = "api-key"
+	allowed["enable"] = "yes"
+	allowed["disable"] = "yes"
 
-	s.HandleFunc("/allow/{key}/",ctx.admin(AllowApiKeyHandler))
-	s.HandleFunc("/allow/{key}/{bucket}/",ctx.admin(AllowApiKeyHandler))
+	api.AdminPutCall("/g/{bucket}",allowed,ApiV1PutBucketHandler)
+	api.AdminDeleteCall("/g/{bucket}",allowed,ApiV1DeleteBucketHandler)
 
-	s.HandleFunc("/revoke/{key}/",ctx.admin(RevokeApiKeyHandler))
-	s.HandleFunc("/revoke/{key}/{bucket}/",ctx.admin(RevokeApiKeyHandler))
+	allowed = make(map[string]string,0)
+	api.AdminPutCall("/g/{bucket}/{key}",allowed,ApiV1PutKeyHandler)
+	api.AdminDeleteCall("/g/{bucket}/{key}",allowed,ApiV1DeleteKeyHandler)
 
+	api.AdminPutCall("/key",allowed,ApiV1PutApiKeyHandler)
+	api.AdminDeleteCall("/key/{key}",allowed,ApiV1DeleteApiKeyHandler)
+
+	/* print the api */
+	if *showapi {
+		for _,url := range api.api {
+			
+			fmt.Printf("%s\n",url)
+		}
+		
+		for _,url := range api.curl {
+			
+			fmt.Printf("%s\n",url)
+		}
+		
+		return
+	}
 
 	srv := &http.Server{
 		Addr:           *addr,
@@ -87,265 +99,190 @@ func main() {
 	}
 }
 
+type ApiV1Router struct {
 
-type Context struct {
+	addr string
+	sr * mux.Router
+	ctx *Context
 
-	AdminKey string
-	Namespace string
-	Buckets map[Key]*Bucket
+	api []string
+	curl []string
 }
 
-/* AllowApiKey - allow an api key across all buckets, a global api key */
-func (ctx *Context) AllowApiKey(key ApiKey) (bool,error) {
-	
-	if !key.IsValid() {
-		return false,KeyInvalid
-	}
-
-	for _,b := range ctx.Buckets {
-
-		b.AllowApiKey(key) /* we don't care about the return */
-	}
-	return true,nil
-}
-
-/* RevokeApiKey - revoke an api key across all buckets on a global scale */
-func (ctx *Context) RevokeApiKey(key ApiKey) (bool,error) {
-
-	if !key.IsValid() {
-		return false,KeyInvalid
-	}
-
-	for _,b := range ctx.Buckets {
-
-		b.RevokeApiKey(key)
-	}
-	return true,nil
-}
-
-/* This wraps any 'service' calls, such as status and viewing information about the service */
-func (ctx *Context) service(fn func(http.ResponseWriter,*http.Request,*Context)) func(http.ResponseWriter,*http.Request) {
-
-	r := func(w http.ResponseWriter,req *http.Request) {
-
-		fn(w,req,ctx)
-	}
-	return r
-}
-
-/* This wraps all 'client' api calls, security can be added at this level */
-func (ctx *Context) client(fn func(http.ResponseWriter,*http.Request,ApiKey,*Context)) func(http.ResponseWriter,*http.Request) {
+func (a *ApiV1Router) ServiceGetCall(url string,fn func(http.ResponseWriter, *http.Request,*Context)) {
 
 	r := func(w http.ResponseWriter,req *http.Request) {
 		
-		api := ApiKey(req.Header.Get("X-ApiKey"))
-		if len(api) > 0 { /* not set, so don't validate here */
+		fn(w,req,a.ctx)
+	}
 
-			if !api.IsValid() {
+	a.sr.HandleFunc(url,r).Methods("GET")
+	a.api = append(a.api,fmt.Sprintf("GET %s",url))
+	a.curl = append(a.curl,fmt.Sprintf("curl XGET http://%s/api/v1%s",a.addr,url))
+}
+
+func (a *ApiV1Router) ClientGetCall(url string,fn func(http.ResponseWriter,*http.Request,*Bucket)) {
+
+	r := func(w http.ResponseWriter,req *http.Request) {
+	
+		vars := mux.Vars(req)
+		bucket := vars["bucket"]
+		
+		b := a.ctx.GetBucket(Key(bucket))
+		if b == nil {
 			
-				log.Printf("Invalid Api Key %s < %s\n",api.String(),req.RemoteAddr)
-				http.Error(w,"Invalid Api Key",401)
-				return
-			}
+			http.Error(w,"Unauthorized",401)
+			return
 		}
 		
-		fn(w,req,api,ctx)
+		api := ApiKey(req.Header.Get("X-ApiKey"))
+		if valid,err := b.Allowed(api); !valid || err != nil {
+			
+			if err != nil {
+				log.Printf("Invalid Api Key %s < %s (%v)\n",api.String(),req.RemoteAddr,err)
+			} else {
+				log.Printf("Invalid Api Key %s < %s\n",api.String(),req.RemoteAddr)
+			}
+
+			http.Error(w,"Unauthorized",401)
+			return
+		}			
+		
+		fn(w,req,b)
 	}
-	return r
+
+	a.sr.HandleFunc(url,r).Methods("GET")
+	a.api = append(a.api,fmt.Sprintf("GET /api/v1%s[/]",url))
+	a.curl = append(a.curl,fmt.Sprintf("curl -XGET -H \"X-ApiKey:api-key\" http://%s/api/v1%s[/]",a.addr,url))
+	
+	a.sr.HandleFunc(url + "/",r).Methods("GET")
 }
 
-/* This wraps all 'admin' api calls */
-func (ctx *Context) admin(fn func(http.ResponseWriter,*http.Request,*Context)) func(http.ResponseWriter,*http.Request) {
+func (a *ApiV1Router) AdminPutCall(url string,allowed map[string]string,
+	fn func(http.ResponseWriter,*http.Request,*Context)) {
 
 	r := func(w http.ResponseWriter,req *http.Request) {
 
 		adminKey := req.Header.Get("X-AdminKey")
-		if adminKey != ctx.AdminKey {
+		if adminKey != a.ctx.AdminKey {
 			
 			log.Printf("Invalid Admin Key %s < %s\n",adminKey,req.RemoteAddr)
-			http.Error(w,"Invalid Admin Key",401)
+			http.Error(w,"Unauthorized",401)
+			return
+		}
+		
+		req.ParseForm()
+
+		/* check through all the key=value pairs */
+		for k,_ := range req.Form {
+
+			log.Printf("\t%s ?= %v\n",k,allowed)
+
+			if _,isallowed := allowed[k]; !isallowed {
+
+				http.Error(w,"Unauthorized",401)
+				return
+			}
+		}		
+
+		fn(w,req,a.ctx)
+	}
+
+	query := "?"
+	for k,v := range allowed {
+		
+		if query == "?" {
+			query += k + "=" + v
+			continue
+		} 
+		query += "&" + k + "=" + v
+	}
+
+	if query == "?" {
+		query = ""
+	}
+
+	a.sr.HandleFunc(url,r).Methods("PUT")
+	if url != "/" {
+		a.sr.HandleFunc(url + "/",r).Methods("PUT")
+		a.api = append(a.api,fmt.Sprintf("PUT /api/v1%s[/]%s",url,query))
+		a.curl = append(a.curl,
+			fmt.Sprintf("curl -XPUT -H \"X-AdminKey:admin-key\" http://%s/api/v1%s[/]%s",a.addr,url,query))
+		
+	} else {
+		a.api = append(a.api,fmt.Sprintf("PUT /api/v1%s%s",url,query))
+		a.curl = append(a.curl,
+			fmt.Sprintf("curl -XPUT -H \"X-AdminKey:admin-key\" http://%s/api/v1%s%s",a.addr,url,query))
+	}
+}
+
+func (a *ApiV1Router) AdminDeleteCall(url string,allowed map[string]string,
+	fn func(http.ResponseWriter,*http.Request,*Context)) {
+
+	r := func(w http.ResponseWriter,req *http.Request) {
+
+		adminKey := req.Header.Get("X-AdminKey")
+		if adminKey != a.ctx.AdminKey {
+
+			log.Printf("Invalid Admin Key %s < %s\n",adminKey,req.RemoteAddr)
+			http.Error(w,"Unauthorized",401)
 			return
 		}
 
-		fn(w,req,ctx)
+		req.ParseForm()
+
+		for k,_ := range req.Form {
+			if _,isallowed := allowed[k]; !isallowed {
+
+				http.Error(w,"Unauthorized",401)
+				return
+			}
+		}
+
+		fn(w,req,a.ctx)
 	}
-	return r
-}
-
-/* GetBucket - find a global bucket by key */
-func (ctx *Context) GetBucket(key Key) *Bucket {
-
-	if !key.IsValid() {
-		return nil
-	}
-
-	if b,exists := ctx.Buckets[key]; exists {
-		
-		return b
-	}
-	return nil
-}
-
-/* AddBucket - add a new bucket to the global space, fails on existing bucket by same key */
-func (ctx *Context) AddBucket(name Key) (*Bucket,error) {
-
-	if !name.IsValid() {
-		return nil,KeyInvalid
-	}
-
-	if b,exists := ctx.Buckets[name]; exists {
-
-		return b,AlreadyPresent
-	}
-
-	b := NewBucket(name)
 	
-	ctx.Buckets[name] = b
-	return b,nil
-}
-
-/* SetBucket - add a new bucket to the global space, if not existing add new, else return previous */
-func (ctx *Context) SetBucket(name Key) (*Bucket,error) {
-
-	if !name.IsValid() {
-		return nil,KeyInvalid
-	}
-
-	if b,exists := ctx.Buckets[name]; exists {
-
-		return b,nil
-	}
-
-
-	b := new(Bucket)
-	b.Name = name
-	b.Records = make(map[Key]Record,0)
-
-	ctx.Buckets[name] = b
-	return b,nil
-}
-
-/* DelBucket - delete bucket in the global space */
-func (ctx *Context) DelBucket(name Key) (error) {
-
-	if !name.IsValid() {
-		return KeyInvalid
-	}
-
-	if _,exists := ctx.Buckets[name]; !exists {
-
-		return NotFound
-	}
-
-	delete(ctx.Buckets,name)
-	return nil
-}
-
-func NewContext() *Context {
-
-	c := new(Context)
-	c.Buckets = make(map[Key]*Bucket,0)
-	return c
-}
-
-func StatusHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
-
-
-}
-
-func InformationHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
-
-
-}
-
-func ApiInformationHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
-
-
-}
-
-func AllowApiKeyHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
-
-	vars := mux.Vars(req)
-	key := vars["key"]
-	bucket := vars["bucket"]
-
-	/* bucket only : */
-	if b := ctx.GetBucket(Key(bucket)); b != nil {
-
-		ok,err := b.AllowApiKey(ApiKey(key))
-		if err != nil {
-			http.Error(w,err.Error(),500)
-			return
-		}
+	query := "?"
+	for k,v := range allowed {
 		
-		rep := "NO"
-		if ok {
-			rep = "OK"
-		}
-
-		fmt.Fprintf(w,rep)
-		return
+		if query == "?" {
+			query += k + "=" + v
+			continue
+		} 
+		query += "&" + k + "=" + v
 	}
 
-	/* global : */
-	ok,err := ctx.AllowApiKey(ApiKey(key))
-	if err != nil {
-		http.Error(w,err.Error(),500)
-		return
+	if query == "?" {
+		query = ""
 	}
 
-	rep := "NO"
-	if ok {
-		rep = "OK"
+	a.sr.HandleFunc(url,r).Methods("DELETE")
+	if url != "/" {
+		a.sr.HandleFunc(url + "/",r).Methods("DELETE")
+		a.api = append(a.api,fmt.Sprintf("DELETE /api/v1%s[/]%s",url,query))
+		a.curl = append(a.curl,
+			fmt.Sprintf("curl -XDELETE -H \"X-AdminKey:admin-key\" http://%s/api/v1%s[/]%s",a.addr,url,query))
+
+	} else {
+		a.api = append(a.api,fmt.Sprintf("DELETE /api/v1%s%s",url,query))
+		a.curl = append(a.curl,
+			fmt.Sprintf("curl -XDELETE -H \"X-AdminKey:admin-key\" http://%s/api/v1%s%s",a.addr,url,query))
 	}
-	fmt.Fprintf(w,rep)
-}
+}	
 
-func RevokeApiKeyHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
 
-	vars := mux.Vars(req)
-	key := vars["key"]
-	bucket := vars["bucket"]
+func NewApiV1Router(ctx *Context,r *mux.Router,addr string) *ApiV1Router {
 
-	/* bucket only : */
-	if b := ctx.GetBucket(Key(bucket)); b != nil {
+	a := new(ApiV1Router)
+	a.sr = r.PathPrefix("/api/v1").Subrouter()
+	a.ctx = ctx
+	a.addr = addr
+	a.api = make([]string,0)
+	a.curl = make([]string,0)
+	return a
+}	
 
-		ok,err := b.RevokeApiKey(ApiKey(key))
-		if err != nil {
-			http.Error(w,err.Error(),500)
-			return
-		}
 
-		rep := "NO"
-		if ok {
-			rep = "OK"
-		}
-		fmt.Fprintf(w,rep)
-		return
-	}
 
-	/* global : */
-	ok,err := ctx.RevokeApiKey(ApiKey(key))
-	if err != nil {
-		http.Error(w,err.Error(),500)
-		return
-	}
 
-	rep := "NO"
-	if ok {
-		rep = "OK"
-	}
-	fmt.Fprintf(w,rep)
-}
 
-func CreateApiKeyHandler(w http.ResponseWriter,req *http.Request,ctx *Context) {
-
-	/* generate new key */
-	nkey,err := GenerateApiKey(ctx.Namespace)
-	if err != nil {
-
-		http.Error(w,err.Error(),500)
-		return
-	}
-	fmt.Fprintf(w,nkey.String())
-}
